@@ -1,3 +1,4 @@
+use tokio::sync::oneshot::Sender;
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -12,11 +13,13 @@ pub enum PeripheralEvent {
     ReadRequest {
         request: PeripheralRequest,
         offset: u64,
+        responder: Sender<ReadRequestResponse>
     },
     WriteRequest {
         request: PeripheralRequest,
         value: Vec<u8>,
         offset: u64,
+        responder: Sender<WriteRequestResponse> 
     },
 }
 

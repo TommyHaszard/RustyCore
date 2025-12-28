@@ -1,5 +1,4 @@
-use std::collections::BTreeSet;
-use std::{error::Error, sync::mpsc::Sender};
+use std::sync::mpsc::Sender;
 
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -26,5 +25,3 @@ pub trait PeripheralManager: Send + Sync {
 
     async fn update_characteristic(&mut self, characteristic: Uuid, value: Vec<u8>) -> Result<()>;
 }
-
-

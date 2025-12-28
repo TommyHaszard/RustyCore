@@ -33,5 +33,7 @@ async fn setup_central_manager() {
 
 /// Listen to all updates and respond if require
 pub fn handle_updates(update: CentralEvent) {
-    match update {}
+    match update {
+        _ => todo!()
+    }
 }
