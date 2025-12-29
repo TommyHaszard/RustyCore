@@ -1,6 +1,6 @@
-use std::sync::mpsc::Sender;
 
 use async_trait::async_trait;
+use tokio::sync::mpsc::Sender;
 use uuid::Uuid;
 
 use crate::Result;

@@ -4,44 +4,40 @@ use uuid::Uuid;
 #[derive(Debug, Clone)]
 pub enum CentralEvent {
     DeviceDiscovered {
-        request: CentralRequest,
+        server: Uuid,
     },
     DeviceUpdated {
-        request: CentralRequest,
+        server: Uuid,
     },
     DeviceConnected {
-        request: CentralRequest,
+        server: Uuid,
     },
     DeviceDisconnected {
-        request: CentralRequest,
+        server: Uuid,
     },
     ManufacturerDataAdvertisement {
-        request: CentralRequest,
+        server: Uuid,
         manufacturer_data: HashMap<u16, Vec<u8>>,
     },
     ServiceDataAdvertisement {
-        request: CentralRequest,
+        server: Uuid,
         service_data: HashMap<Uuid, Vec<u8>>,
     },
     ServicesAdvertisement {
-        request: CentralRequest,
+        server: Uuid,
         services: Vec<Uuid>,
     },
     StateUpdate {
-        request: CentralRequest,
         state: CentralState,
     },
-}
-
-#[derive(Debug, Clone)]
-pub struct CentralRequest {
-    pub server: String,
-    pub service: Uuid,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CentralState {
     Unknown = 0,
-    PoweredOn = 1,
-    PoweredOff = 2,
+    Resetting = 1,
+    Unsupported = 2,
+    Unauthorized = 3,
+    PoweredOff = 4,
+    PoweredOn = 5,
 }

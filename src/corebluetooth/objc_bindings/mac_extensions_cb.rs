@@ -1,12 +1,16 @@
 use objc2::rc::Retained;
 use objc2_core_bluetooth::{CBCharacteristic, CBService, CBUUID};
-use objc2_foundation::NSString;
+use objc2_foundation::{NSString, NSUUID};
 use uuid::Uuid;
 
 use crate::uuid::ShortUuid;
 
 pub fn uuid_to_cbuuid(uuid: Uuid) -> Retained<CBUUID> {
     unsafe { CBUUID::UUIDWithString(&NSString::from_str(&uuid.to_short_string())) }
+}
+
+pub fn nsuuid_to_uuid(uuid: &NSUUID) -> Uuid {
+    uuid.UUIDString().to_string().parse().unwrap()
 }
 
 pub trait UuidExtension {

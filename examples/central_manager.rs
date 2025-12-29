@@ -23,11 +23,9 @@ async fn setup_central_manager() {
     // start scanning for devices
     central_manager.start_scan(ScanFilter::default()).await.unwrap();
     // Handle Updates
-    tokio::spawn(async move {
         while let Some(event) = receiver_rx.recv().await {
             handle_updates(event);
         }
-    });
     log::info!("Log");
 }
 

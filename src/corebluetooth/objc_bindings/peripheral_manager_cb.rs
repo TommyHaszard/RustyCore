@@ -77,8 +77,8 @@ struct PeripheralManager {
 }
 
 impl PeripheralManager {
-    fn new(sender_tx: mpsc::Sender<PeripheralEvent>, listener: Receiver<ManagerEvent>) -> Self {
-        let delegate: Retained<PeripheralDelegate> = PeripheralDelegate::new(sender_tx);
+    fn new(peripheral_tx: Sender<PeripheralEvent>, manager_rx: Receiver<ManagerEvent>) -> Self {
+        let delegate: Retained<PeripheralDelegate> = PeripheralDelegate::new(peripheral_tx);
         let label: CString = CString::new("CBqueue").unwrap();
         let queue: *mut std::ffi::c_void = unsafe {
             mac_utils_cb::dispatch_queue_create(label.as_ptr(), mac_utils_cb::DISPATCH_QUEUE_SERIAL)
@@ -89,7 +89,7 @@ impl PeripheralManager {
         };
 
         Self {
-            manager_event: listener,
+            manager_event: manager_rx,
             cb_peripheral_manager: peripheral_manager,
             peripheral_delegate: delegate,
             cached_characteristics: HashMap::new(),
