@@ -5,6 +5,8 @@ use uuid::Uuid;
 pub enum CentralEvent {
     DeviceDiscovered {
         server: Uuid,
+        name: String,
+        rssi: i16,
     },
     DeviceUpdated {
         server: Uuid,
@@ -15,9 +17,14 @@ pub enum CentralEvent {
     DeviceDisconnected {
         server: Uuid,
     },
+    DeviceConnectionFailed {
+        server: Uuid,
+        error: Option<String>,
+    },
     ManufacturerDataAdvertisement {
         server: Uuid,
-        manufacturer_data: HashMap<u16, Vec<u8>>,
+        manufacturer_id: u16,
+        manufacturer_data: Vec<u8>,
     },
     ServiceDataAdvertisement {
         server: Uuid,
@@ -30,6 +37,7 @@ pub enum CentralEvent {
     StateUpdate {
         state: CentralState,
     },
+
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

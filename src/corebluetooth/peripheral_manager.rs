@@ -1,15 +1,14 @@
 use async_trait::async_trait;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::{mpsc::Sender, oneshot};
 use uuid::Uuid;
 
 use crate::{
     Result,
     api::{peripheral::PeripheralManager, peripheral_event::PeripheralEvent, service::Service},
-    corebluetooth::objc_bindings::peripheral_manager_cb::ManagerEvent,
 };
 
 pub struct Peripheral {
-    manager_tx: Sender<ManagerEvent>,
+    manager_tx: Sender<PeripheralManagerCommand>,
 }
 
 #[async_trait]
@@ -43,4 +42,34 @@ impl PeripheralManager for Peripheral {
     async fn update_characteristic(&mut self, characteristic: Uuid, value: Vec<u8>) -> Result<()> {
         todo!()
     }
+}
+
+impl Peripheral {
+
+}
+
+pub enum PeripheralManagerCommand {
+    IsPowered {
+        responder: oneshot::Sender<Result<bool>>,
+    },
+    IsAdvertising {
+        responder: oneshot::Sender<Result<bool>>,
+    },
+    StartAdvertising {
+        name: String,
+        uuids: Vec<Uuid>,
+        responder: oneshot::Sender<Result<()>>,
+    },
+    StopAdvertising {
+        responder: oneshot::Sender<Result<()>>,
+    },
+    AddService {
+        service: Service,
+        responder: oneshot::Sender<Result<()>>,
+    },
+    UpdateCharacteristic {
+        characteristic: Uuid,
+        value: Vec<u8>,
+        responder: oneshot::Sender<Result<()>>,
+    },
 }

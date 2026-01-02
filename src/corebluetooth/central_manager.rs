@@ -1,22 +1,22 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::{mpsc::Sender, oneshot};
+use uuid::Uuid;
 
 use crate::{
-    Result,
-    api::{
+    Error, Result, api::{
         central::{CentralManager, PeripheralId, PeripheralRemote, ScanFilter},
         central_event::{CentralEvent, CentralState},
         characteristic::{Characteristic, CharacteristicProperty, CharacteristicWriteType},
         descriptor::Descriptor,
         service::Service,
-    },
+    }
 };
 
 pub struct Central {
     peripherals: DashMap<PeripheralId, PeripheralRemote>,
-    manager_tx: Sender<ManagerEvent>,
+    command_tx: Sender<CentralManagerCommand>,
 }
 
 #[async_trait]
@@ -53,7 +53,9 @@ impl CentralManager for Central {
     }
 }
 
-pub struct Peripheral {}
+pub struct Peripheral {
+    command_tx: Sender<PeripheralRemoteCommand>,
+}
 
 #[async_trait]
 impl PeripheralRemote for Peripheral {
@@ -122,3 +124,71 @@ impl PeripheralRemote for Peripheral {
         todo!()
     }
 }
+
+#[derive(Debug)]
+pub enum PeripheralRemoteCommand {
+     ConnectDevice {
+        peripheral_uuid: Uuid,
+        responder: oneshot::Sender<Result<bool>>,
+    },
+    DisconnectDevice {
+        peripheral_uuid: Uuid,
+        responder: oneshot::Sender<Result<bool>>,
+    },
+    ReadValue {
+        peripheral_uuid: Uuid,
+        service_uuid: Uuid,
+        characteristic_uuid: Uuid,
+        responder: oneshot::Sender<Result<bool>>,
+    },
+    WriteValue {
+        peripheral_uuid: Uuid,
+        service_uuid: Uuid,
+        characteristic_uuid: Uuid,
+        data: Vec<u8>,
+        write_type: CharacteristicWriteType,
+        responder: oneshot::Sender<Result<bool>>,
+    },
+    Subscribe {
+        peripheral_uuid: Uuid,
+        service_uuid: Uuid,
+        characteristic_uuid: Uuid,
+        responder: oneshot::Sender<Result<bool>>,
+    },
+    Unsubscribe {
+        peripheral_uuid: Uuid,
+        service_uuid: Uuid,
+        characteristic_uuid: Uuid,
+        responder: oneshot::Sender<Result<bool>>,
+    },
+    IsConnected {
+        peripheral_uuid: Uuid,
+        responder: oneshot::Sender<Result<bool>>,
+    },
+    ReadDescriptorValue {
+        peripheral_uuid: Uuid,
+        service_uuid: Uuid,
+        characteristic_uuid: Uuid,
+        descriptor_uuid: Uuid,
+        responder: oneshot::Sender<Result<bool>>,
+    },
+    WriteDescriptorValue {
+        peripheral_uuid: Uuid,
+        service_uuid: Uuid,
+        characteristic_uuid: Uuid,
+        descriptor_uuid: Uuid,
+        data: Vec<u8>,
+        responder: oneshot::Sender<Result<bool>>,
+    },
+}
+
+#[derive(Debug)]
+pub enum CentralManagerCommand {
+    GetAdapterState {
+        responder: oneshot::Sender<Result<bool>>,
+    },
+    StartScanning {
+        filter: ScanFilter,
+    },
+    StopScanning,
+   }

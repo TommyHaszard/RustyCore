@@ -1,99 +1,33 @@
 use super::mac_utils_cb;
-use super::peripheral_delegate_cb::PeripheralDelegate;
 use super::{characteristic_utils_cb::parse_characteristic, mac_extensions_cb::uuid_to_cbuuid};
 use crate::Error;
 use crate::api::central::{PeripheralRemote, ScanFilter};
 use crate::api::characteristic::CharacteristicWriteType;
-use crate::api::peripheral_event::PeripheralEvent;
-use crate::api::service::Service;
-use crate::corebluetooth::central_manager::Peripheral;
+use crate::corebluetooth::central_manager::{CentralManagerCommand, Peripheral};
+use crate::corebluetooth::objc_bindings::central_delegate_cb::CentralDelegate;
 use objc2::{AnyThread, msg_send};
 use objc2::{rc::Retained, runtime::AnyObject};
 use objc2_core_bluetooth::{
     CBAdvertisementDataLocalNameKey, CBAdvertisementDataServiceUUIDsKey, CBCentralManager, CBCharacteristic, CBManager, CBManagerAuthorization, CBManagerState, CBMutableCharacteristic, CBMutableService, CBPeripheralManager
 };
 use objc2_foundation::{NSArray, NSData, NSDictionary, NSString};
+use tokio::sync::oneshot;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::OnceLock;
 use std::thread;
 use tokio::runtime;
 use tokio::sync::{
-    mpsc::Receiver,
-    oneshot::{self, Sender},
+    mpsc::{Sender,Receiver},
 };
 use uuid::Uuid;
 
 use crate::api::central_event::CentralEvent;
 
-#[derive(Debug)]
-pub enum ManagerEvent {
-    GetAdapterState {
-        responder: oneshot::Sender<Result<bool, Error>>,
-    },
-    StartScanning {
-        filter: ScanFilter,
-    },
-    StopScanning,
-    ConnectDevice {
-        peripheral_uuid: Uuid,
-        responder: oneshot::Sender<Result<bool, Error>>,
-    },
-    DisconnectDevice {
-        peripheral_uuid: Uuid,
-        responder: oneshot::Sender<Result<bool, Error>>,
-    },
-    ReadValue {
-        peripheral_uuid: Uuid,
-        service_uuid: Uuid,
-        characteristic_uuid: Uuid,
-        responder: oneshot::Sender<Result<bool, Error>>,
-    },
-    WriteValue {
-        peripheral_uuid: Uuid,
-        service_uuid: Uuid,
-        characteristic_uuid: Uuid,
-        data: Vec<u8>,
-        write_type: CharacteristicWriteType,
-        responder: oneshot::Sender<Result<bool, Error>>,
-    },
-    Subscribe {
-        peripheral_uuid: Uuid,
-        service_uuid: Uuid,
-        characteristic_uuid: Uuid,
-        responder: oneshot::Sender<Result<bool, Error>>,
-    },
-    Unsubscribe {
-        peripheral_uuid: Uuid,
-        service_uuid: Uuid,
-        characteristic_uuid: Uuid,
-        responder: oneshot::Sender<Result<bool, Error>>,
-    },
-    IsConnected {
-        peripheral_uuid: Uuid,
-        responder: oneshot::Sender<Result<bool, Error>>,
-    },
-    ReadDescriptorValue {
-        peripheral_uuid: Uuid,
-        service_uuid: Uuid,
-        characteristic_uuid: Uuid,
-        descriptor_uuid: Uuid,
-        responder: oneshot::Sender<Result<bool, Error>>,
-    },
-    WriteDescriptorValue {
-        peripheral_uuid: Uuid,
-        service_uuid: Uuid,
-        characteristic_uuid: Uuid,
-        descriptor_uuid: Uuid,
-        data: Vec<u8>,
-        responder: oneshot::Sender<Result<bool, Error>>,
-    },
-}
-
 static CENTRAL_THREAD: OnceLock<()> = OnceLock::new();
 
 // Handle Peripheral Manager and all communication in a separate thread
-pub fn run_central_thread(sender: Sender<CentralEvent>, listener: Receiver<ManagerEvent>) {
+pub fn run_central_thread(sender: Sender<CentralEvent>, listener: Receiver<CentralManagerCommand>) {
     CENTRAL_THREAD.get_or_init(|| {
         thread::spawn(move || {
             let runtime = runtime::Builder::new_current_thread().enable_time().build();
@@ -115,12 +49,11 @@ struct CentralManager {
     manager: Retained<CBCentralManager>,
     delegate: Retained<CentralDelegate>,
     peripherals: HashMap<Uuid, Peripheral>,
-    manager_event: Receiver<ManagerEvent>,
+    manager_command_rx: Receiver<CentralManagerCommand>,
 }
 
 impl CentralManager {
-    // Pretty sure these come preallocated?
-    fn new(central_tx: Sender<CentralEvent>, manager_rx: Receiver<ManagerEvent>) -> Self{
+    fn new(central_tx: Sender<CentralEvent>, manager_rx: Receiver<CentralManagerCommand>) -> Self{
         let delegate: Retained<CentralDelegate> = CentralDelegate::new(central_tx);
 
         let label = CString::new("CBqueue").unwrap();
@@ -136,7 +69,17 @@ impl CentralManager {
             manager,
             delegate,
             peripherals: HashMap::new(),
-            manager_event: manager_rx,
+            manager_command_rx: manager_rx,
+        }
+    }
+
+    async fn handle_event(&mut self) {
+        if let Some(event) = self.manager_command_rx.recv().await {
+            let _ = match event {
+                CentralManagerCommand::GetAdapterState { responder } => todo!(),
+                CentralManagerCommand::StartScanning { filter } => todo!(),
+                CentralManagerCommand::StopScanning => todo!(),
+            };
         }
     }
 }

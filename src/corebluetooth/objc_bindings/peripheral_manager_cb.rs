@@ -5,6 +5,7 @@ use super::{characteristic_utils_cb::parse_characteristic, mac_extensions_cb::uu
 use crate::Error;
 use crate::api::peripheral_event::PeripheralEvent;
 use crate::api::service::Service;
+use crate::corebluetooth::peripheral_manager::PeripheralManagerCommand;
 use objc2::{rc::Retained, runtime::AnyObject};
 use objc2::{AnyThread, msg_send};
 use objc2_core_bluetooth::{
@@ -21,36 +22,11 @@ use tokio::runtime;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use uuid::Uuid;
 
-pub enum ManagerEvent {
-    IsPowered {
-        responder: oneshot::Sender<Result<bool, Error>>,
-    },
-    IsAdvertising {
-        responder: oneshot::Sender<Result<bool, Error>>,
-    },
-    StartAdvertising {
-        name: String,
-        uuids: Vec<Uuid>,
-        responder: oneshot::Sender<Result<(), Error>>,
-    },
-    StopAdvertising {
-        responder: oneshot::Sender<Result<(), Error>>,
-    },
-    AddService {
-        service: Service,
-        responder: oneshot::Sender<Result<(), Error>>,
-    },
-    UpdateCharacteristic {
-        characteristic: Uuid,
-        value: Vec<u8>,
-        responder: oneshot::Sender<Result<(), Error>>,
-    },
-}
 
 static PERIPHERAL_THREAD: OnceLock<()> = OnceLock::new();
 
 // Handle Peripheral Manager and all communication in a separate thread
-pub fn run_peripheral_thread(sender: Sender<PeripheralEvent>, listener: Receiver<ManagerEvent>) {
+pub fn run_peripheral_thread(sender: Sender<PeripheralEvent>, listener: Receiver<PeripheralManagerCommand>) {
     PERIPHERAL_THREAD.get_or_init(|| {
         thread::spawn(move || {
             let runtime = runtime::Builder::new_current_thread().enable_time().build();
@@ -70,14 +46,14 @@ pub fn run_peripheral_thread(sender: Sender<PeripheralEvent>, listener: Receiver
 
 #[derive(Debug)]
 struct PeripheralManager {
-    manager_event: Receiver<ManagerEvent>,
+    manager_command_rx: Receiver<PeripheralManagerCommand>,
     cb_peripheral_manager: Retained<CBPeripheralManager>,
     peripheral_delegate: Retained<PeripheralDelegate>,
     cached_characteristics: HashMap<Uuid, Retained<CBMutableCharacteristic>>,
 }
 
 impl PeripheralManager {
-    fn new(peripheral_tx: Sender<PeripheralEvent>, manager_rx: Receiver<ManagerEvent>) -> Self {
+    fn new(peripheral_tx: Sender<PeripheralEvent>, manager_rx: Receiver<PeripheralManagerCommand>) -> Self {
         let delegate: Retained<PeripheralDelegate> = PeripheralDelegate::new(peripheral_tx);
         let label: CString = CString::new("CBqueue").unwrap();
         let queue: *mut std::ffi::c_void = unsafe {
@@ -89,7 +65,7 @@ impl PeripheralManager {
         };
 
         Self {
-            manager_event: manager_rx,
+            manager_command_rx: manager_rx,
             cb_peripheral_manager: peripheral_manager,
             peripheral_delegate: delegate,
             cached_characteristics: HashMap::new(),
@@ -97,28 +73,28 @@ impl PeripheralManager {
     }
 
     async fn handle_event(&mut self) {
-        if let Some(event) = self.manager_event.recv().await {
+        if let Some(event) = self.manager_command_rx.recv().await {
             let _ = match event {
-                ManagerEvent::IsPowered { responder } => {
+                PeripheralManagerCommand::IsPowered { responder } => {
                     let _ = responder.send(Ok(self.is_powered()));
                 }
-                ManagerEvent::IsAdvertising { responder } => {
+                PeripheralManagerCommand::IsAdvertising { responder } => {
                     let _ = responder.send(Ok(self.is_advertising()));
                 }
-                ManagerEvent::StartAdvertising {
+                PeripheralManagerCommand::StartAdvertising {
                     name,
                     uuids,
                     responder,
                 } => {
                     let _ = responder.send(self.start_advertising(&name, &uuids).await);
                 }
-                ManagerEvent::StopAdvertising { responder } => {
+                PeripheralManagerCommand::StopAdvertising { responder } => {
                     let _ = responder.send(Ok(self.stop_advertising()));
                 }
-                ManagerEvent::AddService { service, responder } => {
+                PeripheralManagerCommand::AddService { service, responder } => {
                     let _ = responder.send(self.add_service(&service).await);
                 }
-                ManagerEvent::UpdateCharacteristic {
+                PeripheralManagerCommand::UpdateCharacteristic {
                     characteristic,
                     value,
                     responder,
