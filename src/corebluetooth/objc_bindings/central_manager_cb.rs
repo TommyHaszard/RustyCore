@@ -1,25 +1,17 @@
 use super::mac_utils_cb;
-use super::{characteristic_utils_cb::parse_characteristic, mac_extensions_cb::uuid_to_cbuuid};
-use crate::Error;
-use crate::api::central::{PeripheralRemote, ScanFilter};
-use crate::api::characteristic::CharacteristicWriteType;
 use crate::corebluetooth::central_manager::{CentralManagerCommand, Peripheral};
-use crate::corebluetooth::objc_bindings::central_delegate_cb::CentralDelegate;
+use crate::corebluetooth::objc_bindings::central_manager_delegate_cb::{
+    CentralManagerDelegate, CentralManagerDelegateEvent,
+};
 use objc2::{AnyThread, msg_send};
 use objc2::{rc::Retained, runtime::AnyObject};
-use objc2_core_bluetooth::{
-    CBAdvertisementDataLocalNameKey, CBAdvertisementDataServiceUUIDsKey, CBCentralManager, CBCharacteristic, CBManager, CBManagerAuthorization, CBManagerState, CBMutableCharacteristic, CBMutableService, CBPeripheralManager
-};
-use objc2_foundation::{NSArray, NSData, NSDictionary, NSString};
-use tokio::sync::oneshot;
+use objc2_core_bluetooth::CBCentralManager;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::OnceLock;
 use std::thread;
 use tokio::runtime;
-use tokio::sync::{
-    mpsc::{Sender,Receiver},
-};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use uuid::Uuid;
 
 use crate::api::central_event::CentralEvent;
@@ -47,18 +39,23 @@ pub fn run_central_thread(sender: Sender<CentralEvent>, listener: Receiver<Centr
 
 struct CentralManager {
     manager: Retained<CBCentralManager>,
-    delegate: Retained<CentralDelegate>,
+    delegate: Retained<CentralManagerDelegate>,
     peripherals: HashMap<Uuid, Peripheral>,
     manager_command_rx: Receiver<CentralManagerCommand>,
+    corebluetooth_delegate_rx: Receiver<CentralManagerDelegateEvent>,
+    central_tx: Sender<CentralEvent>,
 }
 
 impl CentralManager {
-    fn new(central_tx: Sender<CentralEvent>, manager_rx: Receiver<CentralManagerCommand>) -> Self{
-        let delegate: Retained<CentralDelegate> = CentralDelegate::new(central_tx);
+    fn new(central_tx: Sender<CentralEvent>, manager_rx: Receiver<CentralManagerCommand>) -> Self {
+        let (delegate_tx, delegate_rx) = mpsc::channel::<CentralManagerDelegateEvent>(256);
+
+        let delegate: Retained<CentralManagerDelegate> = CentralManagerDelegate::new(delegate_tx);
 
         let label = CString::new("CBqueue").unwrap();
-        let queue =
-            unsafe { mac_utils_cb::dispatch_queue_create(label.as_ptr(), mac_utils_cb::DISPATCH_QUEUE_SERIAL) };
+        let queue = unsafe {
+            mac_utils_cb::dispatch_queue_create(label.as_ptr(), mac_utils_cb::DISPATCH_QUEUE_SERIAL)
+        };
         let queue: *mut AnyObject = queue.cast();
 
         let manager: Retained<CBCentralManager> = unsafe {
@@ -70,16 +67,27 @@ impl CentralManager {
             delegate,
             peripherals: HashMap::new(),
             manager_command_rx: manager_rx,
+            corebluetooth_delegate_rx: delegate_rx,
+            central_tx,
         }
     }
 
     async fn handle_event(&mut self) {
-        if let Some(event) = self.manager_command_rx.recv().await {
-            let _ = match event {
-                CentralManagerCommand::GetAdapterState { responder } => todo!(),
-                CentralManagerCommand::StartScanning { filter } => todo!(),
-                CentralManagerCommand::StopScanning => todo!(),
-            };
-        }
+        tokio::select! {
+            // Match events from above
+            Some(manager_command) = self.manager_command_rx.recv() => {
+                match manager_command {
+                    CentralManagerCommand::GetAdapterState { responder } => todo!(),
+                    CentralManagerCommand::StartScanning { filter } => todo!(),
+                    CentralManagerCommand::StopScanning => todo!(),
+                }
+            }
+
+            // Match events from Corebluetooth delegate
+            Some(delegate_event) = self.corebluetooth_delegate_rx.recv() => {
+                match delegate_event {
+                }
+            }
+        };
     }
 }

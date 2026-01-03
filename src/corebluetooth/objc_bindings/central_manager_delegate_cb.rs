@@ -1,8 +1,9 @@
 use crate::{
     api::central_event::{CentralEvent, CentralState},
-    corebluetooth::objc_bindings::{AdvertisementResolver, ServiceResolver, mac_extensions_cb::{
-        self,
-    }},
+    corebluetooth::objc_bindings::{
+        AdvertisementResolver, ServiceResolver,
+        mac_extensions_cb::{self},
+    },
 };
 
 use futures::executor;
@@ -14,23 +15,23 @@ use objc2_core_bluetooth::{
     CBAdvertisementDataLocalNameKey, CBAdvertisementDataManufacturerDataKey,
     CBAdvertisementDataServiceDataKey, CBAdvertisementDataServiceUUIDsKey, CBCentralManager,
     CBCentralManagerDelegate, CBCharacteristic, CBDescriptor, CBManagerState, CBPeripheral,
-    CBPeripheralDelegate, CBService, CBUUID,
+    CBService, CBUUID,
 };
 use objc2_foundation::{
     NSArray, NSData, NSDictionary, NSError, NSNumber, NSObject, NSObjectProtocol, NSString,
 };
-use uuid::Uuid;
-use std::{convert::TryInto, sync::Arc};
 use std::{collections::HashMap, fmt::Debug};
+use std::{convert::TryInto, sync::Arc};
 use tokio::sync::{Mutex, mpsc::Sender};
+use uuid::Uuid;
 
 // Instance Variables that are stored within the ObjC class allowing communication between Rust
 // code and the ObjC class.
 #[derive(Debug)]
 pub struct IVars {
-    pub sender: Sender<CentralEvent>,
+    pub sender: Sender<CentralManagerDelegateEvent>,
     pub services_resolver: Arc<Mutex<ServiceResolver>>,
-    pub advertisment_resolver: Arc<Mutex<AdvertisementResolver>>,
+    pub advertisement_resolver: Arc<Mutex<AdvertisementResolver>>,
 }
 
 define_class!(
@@ -49,7 +50,7 @@ define_class!(
             trace!("delegate_centralmanagerdidupdatestate");
             let state = unsafe { central.state() };
             let central_state = convert_state(state);
-            self.send_event(CentralEvent::StateUpdate {
+            self.send_event(CentralManagerDelegateEvent::StateUpdate {
                 state: central_state,
             });
         }
@@ -73,7 +74,7 @@ define_class!(
             unsafe { peripheral.discoverServices(None) }
             let retained_uuid = unsafe { &peripheral.identifier() };
             let peripheral_uuid = mac_extensions_cb::nsuuid_to_uuid(retained_uuid);
-            self.send_event(CentralEvent::DeviceConnected {
+            self.send_event(CentralManagerDelegateEvent::DeviceConnected {
                 server: peripheral_uuid,
             });
         }
@@ -91,7 +92,7 @@ define_class!(
             );
             let retained_uuid = unsafe { &peripheral.identifier() };
             let peripheral_uuid = mac_extensions_cb::nsuuid_to_uuid(retained_uuid);
-            self.send_event(CentralEvent::DeviceDisconnected {
+            self.send_event(CentralManagerDelegateEvent::DeviceDisconnected {
                 server: peripheral_uuid,
             });
         }
@@ -107,10 +108,8 @@ define_class!(
             let retained_uuid = unsafe { &peripheral.identifier() };
             let peripheral_uuid = mac_extensions_cb::nsuuid_to_uuid(retained_uuid);
             let error_description = error.map(|error| error.localizedDescription().to_string());
-            self.send_event(CentralEvent::DeviceConnectionFailed {
-                server: peripheral_uuid,
-                error: error_description,
-            });
+            //TODO: Oneshot callback
+
         }
 
         #[unsafe(method(centralManager:didDiscoverPeripheral:advertisementData:RSSI:))]
@@ -142,7 +141,7 @@ define_class!(
 
             let rssi_value = rssi.as_i16();
 
-            self.send_event(CentralEvent::DeviceDiscovered {
+            self.send_event(CentralManagerDelegateEvent::DeviceDiscovered {
                 server: peripheral_uuid,
                 name: local_name,
                 rssi: rssi_value,
@@ -161,7 +160,7 @@ define_class!(
                     let (manufacturer_id, manufacturer_data) =
                         unsafe { manufacturer_data.as_bytes_unchecked().split_at(2) };
 
-                    self.send_event(CentralEvent::ManufacturerDataAdvertisement {
+                    self.send_event(CentralManagerDelegateEvent::ManufacturerDataAdvertisement {
                         server: peripheral_uuid,
                         manufacturer_id: u16::from_le_bytes(manufacturer_id.try_into().unwrap()),
                         manufacturer_data: Vec::from(manufacturer_data),
@@ -185,18 +184,19 @@ define_class!(
                             let nsdata = &*data_ptr;
                             nsdata.as_bytes_unchecked().to_vec()
                         };
-                        let service_uuid: Uuid = unsafe {mac_extensions_cb::cbuuid_to_uuid(&cbuuid) };
+                        let service_uuid: Uuid =
+                            unsafe { mac_extensions_cb::cbuuid_to_uuid(&cbuuid) };
                         result.insert(service_uuid, data);
                     }
                 }
 
-                self.send_event(CentralEvent::ServiceDataAdvertisement {
+                self.send_event(CentralManagerDelegateEvent::ServiceDataAdvertisement {
                     server: peripheral_uuid,
                     service_data: result,
                 });
             }
 
-            let services = unsafe {adv_data.objectForKey( CBAdvertisementDataServiceUUIDsKey)};
+            let services = unsafe { adv_data.objectForKey(CBAdvertisementDataServiceUUIDsKey) };
             if let Some(services) = services {
                 // SAFETY: services is `NSArray<CBUUID>`
                 let services: *const AnyObject = Retained::as_ptr(&services);
@@ -205,11 +205,11 @@ define_class!(
 
                 let mut service_uuids = Vec::new();
                 for cbuuid in services {
-                    let service_uuid: Uuid = unsafe {mac_extensions_cb::cbuuid_to_uuid(&cbuuid) };
+                    let service_uuid: Uuid = unsafe { mac_extensions_cb::cbuuid_to_uuid(&cbuuid) };
                     service_uuids.push(service_uuid);
                 }
 
-                self.send_event(CentralEvent::ServicesAdvertisement {
+                self.send_event(CentralManagerDelegateEvent::ServicesAdvertisement {
                     server: peripheral_uuid,
                     services: service_uuids,
                 });
@@ -219,12 +219,16 @@ define_class!(
 );
 
 impl CentralManagerDelegate {
-    pub fn new(sender: Sender<CentralEvent>) -> Retained<Self> {
-        let this = CentralManagerDelegate::alloc().set_ivars(IVars { sender });
+    pub fn new(sender: Sender<CentralManagerDelegateEvent>) -> Retained<Self> {
+        let this = CentralManagerDelegate::alloc().set_ivars(IVars {
+            sender,
+            services_resolver: Arc::new(Mutex::new(ServiceResolver::new())),
+            advertisement_resolver: Arc::new(Mutex::new(AdvertisementResolver::new())),
+        });
         unsafe { msg_send![super(this), init] }
     }
 
-    fn send_event(&self, event: CentralEvent) {
+    fn send_event(&self, event: CentralManagerDelegateEvent) {
         let sender = self.ivars().sender.clone();
         executor::block_on(async {
             if let Err(e) = sender.send(event).await {
@@ -279,4 +283,34 @@ fn convert_state(cb_state: CBManagerState) -> CentralState {
             CentralState::Unknown
         }
     }
+}
+
+pub enum CentralManagerDelegateEvent {
+    DeviceDiscovered {
+        server: Uuid,
+        name: String,
+        rssi: i16,
+    },
+    DeviceConnected {
+        server: Uuid,
+    },
+    DeviceDisconnected {
+        server: Uuid,
+    },
+    ManufacturerDataAdvertisement {
+        server: Uuid,
+        manufacturer_id: u16,
+        manufacturer_data: Vec<u8>,
+    },
+    ServiceDataAdvertisement {
+        server: Uuid,
+        service_data: HashMap<Uuid, Vec<u8>>,
+    },
+    ServicesAdvertisement {
+        server: Uuid,
+        services: Vec<Uuid>,
+    },
+    StateUpdate {
+        state: CentralState,
+    },
 }

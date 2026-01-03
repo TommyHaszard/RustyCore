@@ -1,13 +1,13 @@
-use tokio::sync::{oneshot};
 use super::mac_utils_cb;
-use super::peripheral_delegate_cb::PeripheralDelegate;
+use super::peripheral_manager_delegate_cb::PeripheralManagerDelegate;
 use super::{characteristic_utils_cb::parse_characteristic, mac_extensions_cb::uuid_to_cbuuid};
 use crate::Error;
 use crate::api::peripheral_event::PeripheralEvent;
 use crate::api::service::Service;
+use crate::corebluetooth::objc_bindings::peripheral_manager_delegate_cb::PeripheralManagerDelegateEvent;
 use crate::corebluetooth::peripheral_manager::PeripheralManagerCommand;
-use objc2::{rc::Retained, runtime::AnyObject};
 use objc2::{AnyThread, msg_send};
+use objc2::{rc::Retained, runtime::AnyObject};
 use objc2_core_bluetooth::{
     CBAdvertisementDataLocalNameKey, CBAdvertisementDataServiceUUIDsKey, CBCharacteristic,
     CBManager, CBManagerAuthorization, CBManagerState, CBMutableCharacteristic, CBMutableService,
@@ -20,13 +20,16 @@ use std::sync::OnceLock;
 use std::thread;
 use tokio::runtime;
 use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::oneshot;
 use uuid::Uuid;
-
 
 static PERIPHERAL_THREAD: OnceLock<()> = OnceLock::new();
 
 // Handle Peripheral Manager and all communication in a separate thread
-pub fn run_peripheral_thread(sender: Sender<PeripheralEvent>, listener: Receiver<PeripheralManagerCommand>) {
+pub fn run_peripheral_thread(
+    sender: Sender<PeripheralEvent>,
+    listener: Receiver<PeripheralManagerCommand>,
+) {
     PERIPHERAL_THREAD.get_or_init(|| {
         thread::spawn(move || {
             let runtime = runtime::Builder::new_current_thread().enable_time().build();
@@ -46,15 +49,22 @@ pub fn run_peripheral_thread(sender: Sender<PeripheralEvent>, listener: Receiver
 
 #[derive(Debug)]
 struct PeripheralManager {
-    manager_command_rx: Receiver<PeripheralManagerCommand>,
     cb_peripheral_manager: Retained<CBPeripheralManager>,
-    peripheral_delegate: Retained<PeripheralDelegate>,
+    peripheral_delegate: Retained<PeripheralManagerDelegate>,
     cached_characteristics: HashMap<Uuid, Retained<CBMutableCharacteristic>>,
+    peripheral_tx: Sender<PeripheralEvent>,
+    corebluetooth_delegate_rx: Receiver<PeripheralManagerDelegateEvent>,
+    manager_command_rx: Receiver<PeripheralManagerCommand>,
 }
 
 impl PeripheralManager {
-    fn new(peripheral_tx: Sender<PeripheralEvent>, manager_rx: Receiver<PeripheralManagerCommand>) -> Self {
-        let delegate: Retained<PeripheralDelegate> = PeripheralDelegate::new(peripheral_tx);
+    fn new(
+        peripheral_tx: Sender<PeripheralEvent>,
+        manager_rx: Receiver<PeripheralManagerCommand>,
+    ) -> Self {
+        let (delegate_tx, delegate_rx) = mpsc::channel::<PeripheralManagerDelegateEvent>(256);
+        let delegate: Retained<PeripheralManagerDelegate> =
+            PeripheralManagerDelegate::new(delegate_tx);
         let label: CString = CString::new("CBqueue").unwrap();
         let queue: *mut std::ffi::c_void = unsafe {
             mac_utils_cb::dispatch_queue_create(label.as_ptr(), mac_utils_cb::DISPATCH_QUEUE_SERIAL)
@@ -68,13 +78,18 @@ impl PeripheralManager {
             manager_command_rx: manager_rx,
             cb_peripheral_manager: peripheral_manager,
             peripheral_delegate: delegate,
+            peripheral_tx,
             cached_characteristics: HashMap::new(),
+            corebluetooth_delegate_rx: delegate_rx,
         }
     }
 
     async fn handle_event(&mut self) {
-        if let Some(event) = self.manager_command_rx.recv().await {
-            let _ = match event {
+        tokio::select! {
+
+        // Match events from above
+        Some(manager_command) = self.manager_command_rx.recv() => {
+            match manager_command {
                 PeripheralManagerCommand::IsPowered { responder } => {
                     let _ = responder.send(Ok(self.is_powered()));
                 }
@@ -101,8 +116,15 @@ impl PeripheralManager {
                 } => {
                     let _ = responder.send(self.update_characteristic(characteristic, value).await);
                 }
-            };
+            }
         }
+
+        // Match events from Corebluetooth delegate
+        Some(delegate_event) = self.corebluetooth_delegate_rx.recv() => {
+            match delegate_event {
+                }
+            }
+        };
     }
 
     fn is_powered(self: &Self) -> bool {
@@ -117,9 +139,7 @@ impl PeripheralManager {
             .peripheral_delegate
             .is_waiting_for_advertisement_result()
         {
-            return Err(Error::from_string(
-                "Already in progress".to_string(),
-            ));
+            return Err(Error::from_string("Already in progress".to_string()));
         }
 
         let mut keys: Vec<&NSString> = vec![];
@@ -174,7 +194,7 @@ impl PeripheralManager {
                     );
             }
         }
-        return Ok(());
+        return self.peripheral_delegate.ensure_characteristic_updated(&characteristic).await;
     }
 
     // Peripheral with cache value must only have Read permission, else it will crash
@@ -184,9 +204,7 @@ impl PeripheralManager {
             .peripheral_delegate
             .is_waiting_for_service_result(service.uuid)
         {
-            return Err(Error::from_string(
-                "Already in progress".to_string(),
-            ));
+            return Err(Error::from_string("Already in progress".to_string()));
         }
 
         unsafe {
@@ -225,4 +243,3 @@ pub fn is_authorized() -> bool {
     return authorization != CBManagerAuthorization::Restricted
         && authorization != CBManagerAuthorization::Denied;
 }
-

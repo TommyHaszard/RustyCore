@@ -25,7 +25,7 @@ use uuid::Uuid;
 // code and the ObjC class.
 #[derive(Debug)]
 pub struct IVars {
-    pub sender: Sender<PeripheralEvent>,
+    pub sender: Sender<PeripheralManagerDelegateEvent>,
     pub services_resolver: Arc<Mutex<ServiceResolver>>,
     pub advertisement_resolver: Arc<Mutex<AdvertisementResolver>>,
 }
@@ -37,11 +37,11 @@ define_class! {
     #[thread_kind = AnyThread]
     #[name = "PeripheralManagerDelegate"]
     #[ivars = IVars]
-    pub struct PeripheralDelegate;
+    pub struct PeripheralManagerDelegate;
 
-    unsafe impl NSObjectProtocol for PeripheralDelegate {}
+    unsafe impl NSObjectProtocol for PeripheralManagerDelegate {}
 
-    unsafe impl CBPeripheralManagerDelegate for PeripheralDelegate {
+    unsafe impl CBPeripheralManagerDelegate for PeripheralManagerDelegate {
         #[unsafe(method(peripheralManagerDidUpdateState:))]
          fn delegate_peripheralmanagerdidupdatestate(&self, peripheral: &CBPeripheralManager){
                 let state = unsafe { peripheral.state() };
@@ -187,14 +187,14 @@ define_class! {
     }
 }
 
-impl PeripheralDelegate {
-    pub fn new(sender: Sender<PeripheralEvent>) -> Retained<PeripheralDelegate> {
-        let this = PeripheralDelegate::alloc().set_ivars(IVars {
+impl PeripheralManagerDelegate {
+    pub fn new(sender: Sender<PeripheralManagerDelegateEvent>) -> Retained<PeripheralManagerDelegate> {
+        let this = PeripheralManagerDelegate::alloc().set_ivars(IVars {
             sender,
             services_resolver: Arc::new(Mutex::new(ServiceResolver::new())),
-            advertisement_resolver: Arc::new(Mutex::new(AdvertisementResolver::new())),
+            advertisement_resolver: Arc::new(Mutex::new(AdvertisementResolver::new()))
         });
-        return unsafe { msg_send![super(this), init] };
+        unsafe { msg_send![super(this), init] }
     }
 
     pub fn is_waiting_for_advertisement_result(&self) -> bool {
@@ -282,7 +282,7 @@ impl PeripheralDelegate {
 }
 
 /// Event handler
-impl PeripheralDelegate {
+impl PeripheralManagerDelegate {
     fn send_event(&self, event: PeripheralEvent) {
         let sender = self.ivars().sender.clone();
         executor::block_on(async {
@@ -360,6 +360,10 @@ impl PeripheralDelegate {
         };
     }
 }
+
+pub enum PeripheralManagerDelegateEvent {
+
+} 
 
 impl RequestResponse {
     fn to_cb_error(self) -> CBATTError {

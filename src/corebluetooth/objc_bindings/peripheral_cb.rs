@@ -1,96 +1,158 @@
 use std::collections::HashMap;
 
-use objc2::rc::Retained;
-use objc2_core_bluetooth::{CBCharacteristic, CBDescriptor, CBPeripheral};
-use tokio::sync::mpsc::{Receiver, Sender};
+use objc2::{msg_send, rc::Retained};
+use objc2_core_bluetooth::{CBCharacteristic, CBDescriptor, CBPeripheral, CBService};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use uuid::Uuid;
 
-use crate::corebluetooth::central_manager::PeripheralRemoteCommand;
-
+use crate::{
+    api::{
+        central_event::CentralEvent, characteristic::Characteristic, descriptor::Descriptor,
+        service::Service,
+    },
+    corebluetooth::{
+        central_manager::PeripheralRemoteCommand,
+        objc_bindings::peripheral_delegate_cb::{PeripheralDelegate, PeripheralDelegateEvent},
+    },
+};
 
 struct Peripheral {
     peripheral: Retained<CBPeripheral>,
-    services: HashMap<Uuid, ServiceInternal>,
-    event_sender: Sender<PeripheralEventInternal>,
-    manager_command_rx: Receiver<PeripheralRemoteCommand>,
+    delegate: Retained<PeripheralDelegate>,
+    central_tx: Sender<CentralEvent>,
+    cached_services: HashMap<Uuid, Retained<CBService>>,
+    cached_characteristics: HashMap<Uuid, Retained<CBCharacteristic>>,
+    cached_descriptors: HashMap<Uuid, Retained<CBDescriptor>>,
+    remote_command_rx: Receiver<PeripheralRemoteCommand>,
+    corebluetooth_delegate_rx: Receiver<PeripheralDelegateEvent>,
+    service_discovery_resolver: Option<oneshot::Sender<Result<Vec<Service>, String>>>,
+    characteristic_discovery_resolver:
+        HashMap<Uuid, oneshot::Sender<Result<Vec<Characteristic>, String>>>,
+    descriptor_discovery_resolver:
+        HashMap<(Uuid, Uuid), oneshot::Sender<Result<Vec<Descriptor>, String>>>,
+    read_resolver: HashMap<Uuid, oneshot::Sender<Result<Vec<u8>, String>>>,
+    write_resolver: HashMap<Uuid, oneshot::Sender<Result<(), String>>>,
+    subscribe_resolver: HashMap<Uuid, oneshot::Sender<Result<(), String>>>,
 }
 
 impl Peripheral {
     pub fn new(
         peripheral: Retained<CBPeripheral>,
-        event_sender: Sender<PeripheralEventInternal>,
+        central_tx: Sender<CentralEvent>,
+        remote_command_rx: Receiver<PeripheralRemoteCommand>,
     ) -> Self {
+        let (delegate_tx, delegate_rx) = mpsc::channel::<PeripheralDelegateEvent>(256);
+
+        let delegate: Retained<PeripheralDelegate> = PeripheralDelegate::new(delegate_tx);
+
+        // attach this Rust instance with the Delegate in objc2 runtime
+        unsafe {
+            msg_send![&peripheral, setDelegate: &*delegate];
+        }
+
         Self {
             peripheral,
-            services: HashMap::new(),
-            event_sender,
+            delegate,
+            central_tx,
+            remote_command_rx,
+            corebluetooth_delegate_rx: delegate_rx,
+            cached_services: HashMap::new(),
+            cached_characteristics: HashMap::new(),
+            cached_descriptors: HashMap::new(),
+            service_discovery_resolver: None,
+            characteristic_discovery_resolver: HashMap::new(),
+            descriptor_discovery_resolver: HashMap::new(),
+            read_resolver: HashMap::new(),
+            write_resolver: HashMap::new(),
+            subscribe_resolver: HashMap::new(),
         }
     }
 
-    pub fn set_characteristics(
+    async fn handle_event(&mut self) {
+        tokio::select! {
+        // Match events from above
+        Some(manager_command) = self.remote_command_rx.recv() => {
+            match manager_command {
+                PeripheralRemoteCommand::ConnectDevice { peripheral_uuid, responder } => todo!(),
+                PeripheralRemoteCommand::DisconnectDevice { peripheral_uuid, responder } => todo!(),
+                PeripheralRemoteCommand::ReadCharacteristicValue { peripheral_uuid, service_uuid, characteristic_uuid, responder } => todo!(),
+                PeripheralRemoteCommand::WriteCharacteristicValue { peripheral_uuid, service_uuid, characteristic_uuid, data, write_type, responder } => todo!(),
+                PeripheralRemoteCommand::SubscribeCharacteristic { peripheral_uuid, service_uuid, characteristic_uuid, responder } => todo!(),
+                PeripheralRemoteCommand::UnsubscribeCharacteristic { peripheral_uuid, service_uuid, characteristic_uuid, responder } => todo!(),
+                PeripheralRemoteCommand::IsConnected { peripheral_uuid, responder } => todo!(),
+                PeripheralRemoteCommand::ReadDescriptorValue { peripheral_uuid, service_uuid, characteristic_uuid, descriptor_uuid, responder } => todo!(),
+                PeripheralRemoteCommand::WriteDescriptorValue { peripheral_uuid, service_uuid, characteristic_uuid, descriptor_uuid, data, responder } => todo!(),
+            }
+        }
+
+        // Match events from Corebluetooth delegate
+        Some(delegate_event) = self.corebluetooth_delegate_rx.recv() => {
+            match delegate_event {
+                PeripheralDelegateEvent::DiscoveredServices { services, error } => self.discovered_services(services, error),
+                PeripheralDelegateEvent::DiscoveredCharacteristics { service_uuid, characteristics, error } => todo!(),
+                PeripheralDelegateEvent::DiscoveredCharacteristicDescriptors { service_uuid, characteristic_uuid, descriptors, error } => todo!(),
+                PeripheralDelegateEvent::CharacteristicSubscribed {  service_uuid, characteristic_uuid, error} => todo!(),
+                PeripheralDelegateEvent::CharacteristicUnsubscribed {  service_uuid, characteristic_uuid, error} => todo!(),
+                PeripheralDelegateEvent::CharacteristicNotified {  service_uuid, characteristic_uuid, characteristic, error} => todo!(),
+                PeripheralDelegateEvent::CharacteristicWritten {  service_uuid, characteristic_uuid, characteristic, error } => todo!(),
+                PeripheralDelegateEvent::DescriptorNotified {  service_uuid, characteristic_uuid, descriptor_uuid, descriptor, error } => todo!(),
+                PeripheralDelegateEvent::DescriptorWritten {  service_uuid, characteristic_uuid, descriptor_uuid, descriptor, error } => todo!(),
+            }
+            }
+        };
+    }
+
+    // NOTE: We auto discover services when the Delegate discovered_peripheral is triggered.
+    // Don't return the Service until we have finished discovering all the Characteristics and
+    // Descriptors
+    fn discovered_services(
+        &mut self,
+        services: HashMap<Uuid, Retained<CBService>>,
+        error: Option<String>,
+    ) {
+        for service in services.values() {
+            unsafe {
+                self.peripheral
+                    .discoverCharacteristics_forService(None, &service);
+                self.peripheral
+                    .discoverIncludedServices_forService(None, &service);
+            }
+        }
+        self.cached_services = services;
+    }
+
+    // NOTE: We auto discover characteristics when the Delegate
+    // didDiscoverCharacteristicsForService is triggered.
+    // Don't return the Service until we have finished discovering all the Characteristics and
+    // Descriptors
+    fn discovered_characteristics(
+        &mut self,
+        service: Uuid,
+        characteristics: HashMap<Uuid, Retained<CBCharacteristic>>,
+        error: Option<String>,
+    ) {
+        for characteristic in characteristics.values() {
+            unsafe { self.peripheral.discoverDescriptorsForCharacteristic(&characteristic) };
+        }
+        self.cached_characteristics = characteristics;
+    }
+
+    pub fn update_cached_characteristics(
         &mut self,
         service_uuid: Uuid,
-        characteristics: HashMap<Uuid, Retained<CBCharacteristic>>,
+        value: HashMap<Uuid, Retained<CBCharacteristic>>,
     ) {
-        let characteristics = characteristics.into_iter().fold(
-            // Only consider the first characteristic of each UUID
-            // This "should" be unique, but of course it's not enforced
-            HashMap::<Uuid, CharacteristicInternal>::new(),
-            |mut map, (characteristic_uuid, characteristic)| {
-                if !map.contains_key(&characteristic_uuid) {
-                    map.insert(
-                        characteristic_uuid,
-                        CharacteristicInternal::new(characteristic),
-                    );
-                }
-                map
-            },
-        );
-        let service = self
-            .services
-            .get_mut(&service_uuid)
-            .expect("Got characteristics for a service we don't know about");
-        service.characteristics = characteristics;
-        if service.characteristics.is_empty() {
-            service.discovered = true;
-            self.check_discovered();
-        }
     }
 
-    pub fn set_characteristic_descriptors(
+    pub fn update_cached_characteristic_descriptors(
         &mut self,
         service_uuid: Uuid,
         characteristic_uuid: Uuid,
         descriptors: HashMap<Uuid, Retained<CBDescriptor>>,
     ) {
-        let descriptors = descriptors
-            .into_iter()
-            .map(|(descriptor_uuid, descriptor)| {
-                (descriptor_uuid, DescriptorInternal::new(descriptor))
-            })
-            .collect();
-        let service = self
-            .services
-            .get_mut(&service_uuid)
-            .expect("Got descriptors for a service we don't know about");
-        let characteristic = service
-            .characteristics
-            .get_mut(&characteristic_uuid)
-            .expect("Got descriptors for a characteristic we don't know about");
-        characteristic.descriptors = descriptors;
-        characteristic.discovered = true;
-
-        if !service
-            .characteristics
-            .values()
-            .any(|characteristic| !characteristic.discovered)
-        {
-            service.discovered = true;
-            self.check_discovered()
-        }
     }
 
-    fn check_discovered(&mut self) {
+    fn check_discovered(&mut self, service_uuid: Uuid) {
         // It's time for QUESTIONABLE ASSUMPTIONS.
         //
         // For sake of being lazy, we don't want to fire device connection until
@@ -99,46 +161,38 @@ impl Peripheral {
         // service map. Once that's done, we're filled out enough and can send
         // back a Connected reply to the waiting future with all of the
         // characteristic info in it.
-        if !self.services.values().any(|service| !service.discovered) {
-            if self.connected_future_state.is_none() {
-                panic!("We should still have a future at this point!");
-            }
-            let services = self
-                .services
-                .iter()
-                .map(|(&service_uuid, service)| Service {
-                    uuid: service_uuid,
-                    primary: unsafe { service.cbservice.isPrimary() },
-                    characteristics: service
-                        .characteristics
-                        .iter()
-                        .map(|(&characteristic_uuid, characteristic)| {
-                            let descriptors = characteristic
-                                .descriptors
-                                .iter()
-                                .map(|(&descriptor_uuid, _)| Descriptor {
-                                    uuid: descriptor_uuid,
-                                    service_uuid,
-                                    characteristic_uuid,
-                                })
-                                .collect();
-                            Characteristic {
-                                uuid: characteristic_uuid,
-                                service_uuid,
-                                descriptors,
-                                properties: characteristic.properties,
-                            }
-                        })
-                        .collect(),
-                })
-                .collect();
-            self.connected_future_state
-                .take()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .set_reply(CoreBluetoothReply::Connected(services));
+        if self.delegate.is_waiting_for_service(&service_uuid) {
+            panic!("We should still have a future at this point!");
         }
+        let services = self
+            .services
+            .iter()
+            .map(|(&service_uuid, service)| Service {
+                uuid: service_uuid,
+                primary: unsafe { service.cbservice.isPrimary() },
+                characteristics: service
+                    .characteristics
+                    .iter()
+                    .map(|(&characteristic_uuid, characteristic)| {
+                        let descriptors = characteristic
+                            .descriptors
+                            .iter()
+                            .map(|(&descriptor_uuid, _)| Descriptor {
+                                uuid: descriptor_uuid,
+                                service_uuid,
+                                characteristic_uuid,
+                            })
+                            .collect();
+                        Characteristic {
+                            uuid: characteristic_uuid,
+                            service_uuid,
+                            descriptors,
+                            properties: characteristic.properties,
+                        }
+                    })
+                    .collect(),
+            })
+            .collect();
     }
 
     pub fn confirm_disconnect(&mut self) {
@@ -147,6 +201,7 @@ impl Peripheral {
         if let Some(future) = self.disconnected_future_state.take() {
             future.lock().unwrap().set_reply(CoreBluetoothReply::Ok)
         }
+        self.peripheral.readValueForDescriptor(descriptor);
 
         // Fulfill all pending futures
         let error = CoreBluetoothReply::Err(String::from("Device disconnected"));

@@ -135,13 +135,13 @@ pub enum PeripheralRemoteCommand {
         peripheral_uuid: Uuid,
         responder: oneshot::Sender<Result<bool>>,
     },
-    ReadValue {
+    ReadCharacteristicValue {
         peripheral_uuid: Uuid,
         service_uuid: Uuid,
         characteristic_uuid: Uuid,
         responder: oneshot::Sender<Result<bool>>,
     },
-    WriteValue {
+    WriteCharacteristicValue {
         peripheral_uuid: Uuid,
         service_uuid: Uuid,
         characteristic_uuid: Uuid,
@@ -149,13 +149,13 @@ pub enum PeripheralRemoteCommand {
         write_type: CharacteristicWriteType,
         responder: oneshot::Sender<Result<bool>>,
     },
-    Subscribe {
+    SubscribeCharacteristic {
         peripheral_uuid: Uuid,
         service_uuid: Uuid,
         characteristic_uuid: Uuid,
         responder: oneshot::Sender<Result<bool>>,
     },
-    Unsubscribe {
+    UnsubscribeCharacteristic {
         peripheral_uuid: Uuid,
         service_uuid: Uuid,
         characteristic_uuid: Uuid,
