@@ -111,7 +111,7 @@ define_class!(
             let peripheral_uuid =
                 mac_extensions_cb::nsuuid_to_uuid(unsafe { &peripheral.identifier() });
             unsafe {
-                let service_uuid = mac_extensions_cb::cbuuid_to_uuid( &service.UUID() );
+                let service_uuid = mac_extensions_cb::cbuuid_to_uuid(&service.UUID());
                 self.send_event(PeripheralDelegateEvent::DiscoveredCharacteristics {
                     service_uuid,
                     characteristics,
@@ -134,28 +134,24 @@ define_class!(
                 localized_description(error)
             );
 
-            // TODO: make this a oneshot and pull logic into peripheral
-            if error.is_none() {
-                let mut descriptors = HashMap::new();
-                let descs = unsafe { characteristic.descriptors() }.unwrap_or_default();
-                for d in descs {
-                    // Create the map entry we'll need to export.
-                    let uuid = cbuuid_to_uuid(unsafe { &d.UUID() });
-                    descriptors.insert(uuid, d);
-                }
-                let peripheral_uuid = nsuuid_to_uuid(unsafe { &peripheral.identifier() });
-                let service = unsafe { characteristic.service() }.unwrap();
-                let service_uuid = cbuuid_to_uuid(unsafe { &service.UUID() });
-                let characteristic_uuid = cbuuid_to_uuid(unsafe { &characteristic.UUID() });
-                self.send_event(
-                    PeripheralDelegateEvent::DiscoveredCharacteristicDescriptors {
-                        peripheral_uuid,
-                        service_uuid,
-                        characteristic_uuid,
-                        descriptors,
-                    },
-                );
+            let mut descriptors = HashMap::new();
+            let descs = unsafe { characteristic.descriptors() }.unwrap_or_default();
+            for d in descs {
+                let uuid = unsafe { mac_extensions_cb::cbuuid_to_uuid(&d.UUID()) };
+                descriptors.insert(uuid, d);
             }
+            let service = unsafe { characteristic.service() }.unwrap();
+            let service_uuid = unsafe { mac_extensions_cb::cbuuid_to_uuid(&service.UUID()) };
+            let characteristic_uuid =
+                unsafe { mac_extensions_cb::cbuuid_to_uuid(&characteristic.UUID()) };
+            self.send_event(
+                PeripheralDelegateEvent::DiscoveredCharacteristicDescriptors {
+                    service_uuid,
+                    characteristic_uuid,
+                    descriptors,
+                    error: error.map(|e| e.localizedDescription().to_string()),
+                },
+            );
         }
 
         #[unsafe(method(peripheral:didUpdateValueForCharacteristic:error:))]

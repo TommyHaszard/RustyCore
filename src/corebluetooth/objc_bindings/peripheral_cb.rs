@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use objc2::{msg_send, rc::Retained};
 use objc2_core_bluetooth::{CBCharacteristic, CBDescriptor, CBPeripheral, CBService};
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::{
+    mpsc::{self, Receiver, Sender},
+    oneshot,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -89,8 +92,8 @@ impl Peripheral {
         Some(delegate_event) = self.corebluetooth_delegate_rx.recv() => {
             match delegate_event {
                 PeripheralDelegateEvent::DiscoveredServices { services, error } => self.discovered_services(services, error),
-                PeripheralDelegateEvent::DiscoveredCharacteristics { service_uuid, characteristics, error } => todo!(),
-                PeripheralDelegateEvent::DiscoveredCharacteristicDescriptors { service_uuid, characteristic_uuid, descriptors, error } => todo!(),
+                PeripheralDelegateEvent::DiscoveredCharacteristics { service_uuid, characteristics, error } => self.discovered_characteristics(service_uuid, characteristics, error),
+                PeripheralDelegateEvent::DiscoveredCharacteristicDescriptors { service_uuid, characteristic_uuid, descriptors, error } => self.discovered_descriptors(service_uuid, characteristic_uuid, descriptors, error),
                 PeripheralDelegateEvent::CharacteristicSubscribed {  service_uuid, characteristic_uuid, error} => todo!(),
                 PeripheralDelegateEvent::CharacteristicUnsubscribed {  service_uuid, characteristic_uuid, error} => todo!(),
                 PeripheralDelegateEvent::CharacteristicNotified {  service_uuid, characteristic_uuid, characteristic, error} => todo!(),
@@ -118,7 +121,7 @@ impl Peripheral {
                     .discoverIncludedServices_forService(None, &service);
             }
         }
-        self.cached_services = services;
+        self.cached_services.extend(services);
     }
 
     // NOTE: We auto discover characteristics when the Delegate
@@ -132,9 +135,26 @@ impl Peripheral {
         error: Option<String>,
     ) {
         for characteristic in characteristics.values() {
-            unsafe { self.peripheral.discoverDescriptorsForCharacteristic(&characteristic) };
+            unsafe {
+                self.peripheral
+                    .discoverDescriptorsForCharacteristic(&characteristic)
+            };
         }
-        self.cached_characteristics = characteristics;
+        self.cached_characteristics.extend(characteristics);
+    }
+
+    // NOTE: We auto discover descriptors when the Delegate
+    // didDiscoverDescriptorsForCharacteristic is triggered.
+    // Don't return the Service until we have finished discovering all the Characteristics and
+    // Descriptors.
+    fn discovered_descriptors(
+        &mut self,
+        service: Uuid,
+        characteristic_uuid: Uuid,
+        descriptors: HashMap<Uuid, Retained<CBDescriptor>>,
+        error: Option<String>,
+    ) {
+        self.cached_descriptors.extend(descriptors);
     }
 
     pub fn update_cached_characteristics(

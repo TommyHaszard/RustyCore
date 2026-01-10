@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use async_trait::async_trait;
 use tokio::sync::{mpsc::Sender, oneshot};
@@ -134,6 +134,10 @@ pub enum PeripheralRemoteCommand {
     DisconnectDevice {
         peripheral_uuid: Uuid,
         responder: oneshot::Sender<Result<bool>>,
+    },
+    DiscoverServices {
+        peripheral_uuid: Uuid,
+        responder: oneshot::Sender<Result<Vec<Service>>>,
     },
     ReadCharacteristicValue {
         peripheral_uuid: Uuid,
